@@ -29,16 +29,24 @@ def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image]
     return shot_similarity
 
 def frame_feature_vector(frame: Image.Image) -> tuple[float, ...]:
-    ffcm: tuple[float, float, float] = frame_first_colour_moment(frame)
-    fscm: tuple[float, float, float] = frame_second_colour_moment(frame)
+    f1cm: tuple[float, float, float] = frame_first_colour_moment(frame)
+    f2cm: tuple[float, float, float] = frame_second_colour_moment(frame)
+    f3cm: tuple[float, float, float] = frame_third_colour_moment(frame)
+    f4cm: tuple[float, float, float] = frame_fourth_colour_moment(frame)
     ffd: tuple[float, float, float] = frame_fractal_dimension(frame)
     feature_vector: tuple[float, ...] = (
-        ffcm[0],
-        ffcm[1],
-        ffcm[2],
-        fscm[0],
-        fscm[1],
-        fscm[2],
+        f1cm[0],
+        f1cm[1],
+        f1cm[2],
+        f2cm[0],
+        f2cm[1],
+        f2cm[2],
+        f3cm[0],
+        f3cm[1],
+        f3cm[2],
+        f4cm[0],
+        f4cm[1],
+        f4cm[2],
         ffd[0],
         ffd[1],
         ffd[2]
