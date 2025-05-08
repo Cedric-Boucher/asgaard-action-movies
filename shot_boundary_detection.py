@@ -43,17 +43,19 @@ def batch_generator(iterable, batch_size):
             break
         yield batch
 
-def generate_frame_vectors(model_id="google/siglip-base-patch16-224",video_path=""):
+def generate_frame_vectors(model_id="google/siglip-base-patch16-224", video_path=""):
     print(f"Using checkpoint:{model_id}")
     model = SiglipVisionModel.from_pretrained(model_id,device_map=DEVICE)
     processor = AutoProcessor.from_pretrained(model_id)
     start_time = time.time()
     frames = video_to_pil_frames(video_path)
+    video = cv2.VideoCapture(video_path)
+    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
     print("Processing Frames")
     base_file_name_with_extension = os.path.basename(video_path)
     base_file_name, _ = os.path.splitext(base_file_name_with_extension)
     print("Generating Compressed Frame Vectors")
-    for frame in tqdm(frames,desc="Generating Vectors"):
+    for frame in tqdm(frames,desc="Generating Vectors", total=total_frames):
         inputs = processor(images=frame, return_tensors="pt").to(DEVICE)
         outputs = model(**inputs)
         for tensor in outputs.pooler_output:
@@ -79,7 +81,9 @@ def compute_cosine_similarity(frames):
         print("End of frames Reached")
 
 def generate_shots(cosine_similarities,threshold=0.9):
-    for entry in tqdm(compute_cosine_similarity(frames),desc="Detecting Shots"):
+    video = cv2.VideoCapture(video_path)
+    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+    for entry in tqdm(compute_cosine_similarity(frames),desc="Detecting Shots", total=total_frames):
         idx,similarities = entry
         if similarities < threshold:
             yield idx
@@ -125,7 +129,7 @@ def overlay_markers(video_path, shot_boundaries, output_path):
     cap = cv2.VideoCapture(video_path)
     os.makedirs(output_path, exist_ok=True)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    for frame_idx in tqdm(range(total_frames),desc="Writing Frames to Disk:"):
+    for frame_idx in tqdm(range(total_frames),desc="Writing Frames to Disk:", total=total_frames):
         ret, frame = cap.read()
         if not ret:
             break
