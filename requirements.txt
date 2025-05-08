@@ -1,0 +1,11 @@
+transformers==4.51.3
+datasets==3.5.1
+torch==2.7.0
+peft==0.15.2
+pillow==11.2.1
+trl==0.17.0
+bitsandbytes==0.45.5
+python-ffmpeg==2.0.12
+opencv-python==3.44.0.86
+sentencepiece==0.2.0
+protobuf==6.30.2
