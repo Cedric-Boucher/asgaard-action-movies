@@ -1,7 +1,8 @@
 import cv2
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoProcessor, SiglipVisionModel
+from transformers.models.siglip import SiglipVisionModel
+from transformers.models.auto.processing_auto import AutoProcessor
 import argparse
 import torch
 import numpy as np
@@ -16,7 +17,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 # Load model and processor ONCE to avoid reloading
 model_id = "google/siglip-base-patch16-224"
 processor = AutoProcessor.from_pretrained(model_id)
-model = SiglipVisionModel.from_pretrained(model_id).to(device).half().eval()  # Use fp16 precision to reduce memory usage
+model = SiglipVisionModel.from_pretrained(model_id, device_map=device).half().eval()  # Use fp16 precision to reduce memory usage
 
 
 
@@ -101,8 +102,8 @@ def get_key_shots_from_shot(video_path, shots_file, threshold=0.95):
         key_shot_dict["frames"]= list(key_shots)
         yield key_shot_dict
 
-        
-def write_data_incrementally_to_json(data_iterable, filename="processed_data_1.json"):
+
+def write_data_incrementally_to_json(data_iterable, filename="processed_data.json"):
     with open(filename, 'w') as f:
         f.write('[\n')  # Start the JSON array
         first = True
@@ -118,10 +119,9 @@ if __name__ == "__main__":
     print(f"Using Device: {device}")
     parser = argparse.ArgumentParser(description="Key Shot Generator")
     parser.add_argument('--video', type=str, required=True, help="Path to video")
-    parser.add_argument('--threshold', type=float, default=0.95, help="Cosine Similarity Threshold")
+    parser.add_argument('--threshold', type=float, default=0.825, help="Cosine Similarity Threshold")
     parser.add_argument('--shots', type=str, required=True, help="Path to shots CSV file")
-    
+
     args = parser.parse_args()
-    
+
     write_data_incrementally_to_json(get_key_shots_from_shot(args.video, args.shots, args.threshold),"key_shots.json")
-        
