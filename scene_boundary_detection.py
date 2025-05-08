@@ -7,7 +7,8 @@ import math
 def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image], feature_weights: tuple[float, ...]) -> float:
     # sum of frame matches between shots,
     # divided by the number of frames in the shorter of the shots
-    assert sum(feature_weights) > 0.999 and sum(feature_weights) < 1.001
+    assert sum(feature_weights) > 0.999 and sum(feature_weights) < 1.001, \
+        "feature_weights should sum up to 1, but summed to {}".format(sum(feature_weights))
 
     shot_1_frame_feature_values: list[tuple[float, ...]] = [frame_feature_vector(frame) for frame in shot_1]
     shot_2_frame_feature_values: list[tuple[float, ...]] = [frame_feature_vector(frame) for frame in shot_2]
@@ -22,7 +23,8 @@ def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image]
         )
         shot_feature_similarities.append(lcs/min_of_shot_lengths)
 
-    assert len(feature_weights) == len(shot_feature_similarities)
+    assert len(feature_weights) == len(shot_feature_similarities), \
+        "feature_weights should have a len() of {} but had a len() of {}".format(len(shot_feature_similarities), len(feature_weights))
 
     shot_similarity: float = sum(shot_feature_similarities[i]*feature_weights[i] for i in range(len(feature_weights)))
 
