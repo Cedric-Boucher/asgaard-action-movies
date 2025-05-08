@@ -4,6 +4,24 @@ from scipy.stats import skew, kurtosis
 from collections.abc import Callable, Iterable
 import math
 
+FEATURE_WEIGHTS: tuple[float, ...] = (
+    0.08,
+    0.16,
+    0.08,
+    0.06,
+    0.12,
+    0.06,
+    0.02,
+    0.04,
+    0.02,
+    0.01,
+    0.02,
+    0.01,
+    0.08,
+    0.16,
+    0.08
+)
+
 def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image], feature_weights: tuple[float, ...]) -> float:
     # sum of frame matches between shots,
     # divided by the number of frames in the shorter of the shots
