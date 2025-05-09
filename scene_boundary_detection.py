@@ -4,6 +4,9 @@ from scipy.stats import skew, kurtosis
 from collections.abc import Callable, Iterable
 import math
 
+# TODO: need some ground truth to be able to do:
+# TODO: need to train something to determine good feature weights, could do GA
+
 FEATURE_WEIGHTS: tuple[float, ...] = (
     0.08,
     0.16,
@@ -155,3 +158,17 @@ def fractal_dimension(Z: np.ndarray) -> float:
 
     coeffs = np.polyfit(np.log(sizes), np.log(counts), 1)
     return -coeffs[0]
+
+def window_similarity(left_window_shots: list[Iterable[Image.Image]], right_window_shots: list[Iterable[Image.Image]], feature_weights: tuple[float, ...]) -> float:
+    window_similarity: float = (
+        1 / (len(left_window_shots) * len(right_window_shots))
+        * sum(
+            sum(
+                shot_similarity(left_window_shot, right_window_shot, feature_weights)
+                for right_window_shot in right_window_shots
+            )
+            for left_window_shot in left_window_shots
+        )
+    )
+
+    return window_similarity
