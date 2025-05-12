@@ -31,6 +31,10 @@ FEATURE_WEIGHTS: FeatureWeights = (
 
 FEATURE_QUANTIZATION_LEVELS: int = 16
 
+PLOT_FIGURE_SIZE_INCHES: tuple[float, float] = (36.0, 18.0)
+PLOT_FIGURE_DPI: int = 200
+PLOT_HISTOGRAM_NUMBER_OF_BINS: int = 20
+
 T = TypeVar("T")
 
 def shot_similarity(shot_1: Iterable[FeatureVector], shot_2: Iterable[FeatureVector], feature_weights: FeatureWeights, feature_quantization_levels: int) -> float:
@@ -238,7 +242,11 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
         assert len(right_window_shots) == right_window_size
         assert left_window_shots != right_window_shots
 
-        yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
+        try:
+            yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
+        except Exception as e:
+            print(e)
+            return
 
 def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
@@ -316,17 +324,17 @@ if __name__ == "__main__":
     window_similarities: list[float] = list()
     with open("video_window_similarities.txt", "w") as file:
         for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS):
-            file.write(f"video_window_similarity: {video_window_similarity}\n")
+            file.write(f"{video_window_similarity}\n")
             file.flush()
             window_similarities.append(video_window_similarity)
 
     # TODO: plot histogram to determine a good quantization level
-    plt.figure(figsize=(36.0, 18.0))
+    plt.figure(figsize=PLOT_FIGURE_SIZE_INCHES)
     plt.plot(window_similarities)
     plt.xticks(np.arange(0, len(window_similarities)+0.1, 30), minor = False)
     plt.xticks(np.arange(0, len(window_similarities)+0.1, 10), minor = True)
-    plt.yticks(np.arange(0, 1.001, 0.2), minor = False)
-    plt.yticks(np.arange(0, 1.001, 0.1), minor = True)
+    plt.yticks(np.linspace(0, 1, 5), minor = False)
+    plt.yticks(np.linspace(0, 1, 10), minor = True)
     plt.grid(True, "major", "y", linewidth = 2, alpha = 0.5)
     plt.grid(True, "minor", "y", linewidth = 2, alpha = 0.1)
     plt.grid(True, "major", "x", linewidth = 2, alpha = 0.5)
@@ -334,6 +342,14 @@ if __name__ == "__main__":
     plt.xlabel("Shot #")
     plt.ylabel("Window Similarity (0-1)")
     plt.title("Window Similarity Over the Video")
-    plt.savefig("window_similarities_line_plot.webp", format="webp", pil_kwargs={'lossless': True}, dpi=200)
+    plt.savefig("window_similarities_line_plot.webp", format="webp", pil_kwargs={'lossless': True}, dpi=PLOT_FIGURE_DPI)
+
+    plt.figure(figsize=PLOT_FIGURE_SIZE_INCHES)
+    plt.hist(window_similarities, bins=list(np.linspace(0, 1, PLOT_HISTOGRAM_NUMBER_OF_BINS+1)), edgecolor="black")
+    plt.title("Histogram of Window Similarities")
+    plt.xlabel("Window Similarity (0-1)")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    plt.savefig("window_similarities_histogram.webp", format="webp", pil_kwargs={'lossless': True}, dpi=PLOT_FIGURE_DPI)
 
 # TODO: some additional speedup could still be obtained, since frame features are compared (with LCS) multiple times as windows of size >1 slide
