@@ -8,3 +8,4 @@
 *.WEBP
 *.csv
 *.json
+__pycache__/
