@@ -11,7 +11,7 @@ from itertools import islice
 from typing import TypeVar
 
 # TODO: need some ground truth to be able to do:
-# TODO: need to train something to determine good feature weights, could do GA
+# TODO: need to train something to determine good feature weights and quantization levels, could do GA
 
 FeatureVector = tuple[float, ...]
 FeatureWeights = tuple[float, ...]
@@ -28,16 +28,23 @@ FEATURE_WEIGHTS: FeatureWeights = (
     0.08
 )
 
+FEATURE_QUANTIZATION_LEVELS: int = 16
+
 T = TypeVar("T")
 
-def shot_similarity(shot_1: Iterable[FeatureVector], shot_2: Iterable[FeatureVector], feature_weights: FeatureWeights) -> float:
+def shot_similarity(shot_1: Iterable[FeatureVector], shot_2: Iterable[FeatureVector], feature_weights: FeatureWeights, feature_quantization_levels: int) -> float:
     # sum of frame matches between shots,
     # divided by the number of frames in the shorter of the shots
     assert sum(feature_weights) > 0.999 and sum(feature_weights) < 1.001, \
         "feature_weights should sum up to 1, but summed to {}".format(sum(feature_weights))
 
-    shot_1_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame]) for frame in shot_1]
-    shot_2_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame]) for frame in shot_2]
+    if shot_1 == shot_2:
+        # if they are literally the same shot with the same frames (the same object), then obviously their similarity is 1.0
+        print("WARNING: used shot_similarity function to compare identical shot objects, this is likely not intended behaviour")
+        return 1.0
+
+    shot_1_frame_feature_values: list[tuple[int, ...]] = [tuple([quantize_float(value, feature_quantization_levels) for value in frame]) for frame in shot_1]
+    shot_2_frame_feature_values: list[tuple[int, ...]] = [tuple([quantize_float(value, feature_quantization_levels) for value in frame]) for frame in shot_2]
 
     min_of_shot_lengths: int = min(len(shot_1_frame_feature_values), len(shot_2_frame_feature_values))
     assert min_of_shot_lengths > 0, "shots must have more than 0 frames. shot_1: {} frames, shot_2: {} frames".format(len(shot_1_frame_feature_values), len(shot_2_frame_feature_values))
@@ -77,13 +84,18 @@ def frame_feature_vector(frame: Image.Image) -> FeatureVector:
     )
     return feature_vector
 
-def binarize_float(value: float, least: float = 0.0, greatest: float = 1.0) -> bool:
+def quantize_float(value: float, quantization_levels: int, least: float = 0.0, greatest: float = 1.0) -> int:
+    assert quantization_levels >= 2, "quantization_levels must be greater than or equal to 2"
     assert value >= least, "value of {} was not greater than least of {}".format(value, least)
     assert value <= greatest, "value of {} was not less than greatest of {}".format(value, greatest)
     # the above assertions also imply that greatest >= least
-    return (value >= (least + (greatest - least)/2))
+    normalized_value: float = (value - least) / (greatest - least) # normalized to [0, 1] range
+    quantization_level: int = int(normalized_value * quantization_levels)
+    quantization_level = min(max(quantization_level, 0), quantization_levels - 1) # clamp to ensure valid output
 
-def longest_common_subsequence_length(sequence_1: list[int], sequence_2: list[int]) -> int:
+    return quantization_level
+
+def longest_common_subsequence_length(sequence_1: list[T], sequence_2: list[T]) -> int:
     "Each shot is a list of a float-valued feature for each frame in the shot"
     m: int = len(sequence_1)
     n: int = len(sequence_2)
@@ -185,17 +197,25 @@ def fractal_dimension(Z: np.ndarray) -> float:
 
     return fractal_dimension
 
-def window_similarity(left_window_shots: list[list[FeatureVector]], right_window_shots: list[list[FeatureVector]], feature_weights: FeatureWeights) -> float:
-    shot_similarity_sum: float = 0
-    for left_i in range(len(left_window_shots)):
-        for right_i in range(len(right_window_shots)):
-            shot_similarity_sum += shot_similarity(left_window_shots[left_i], right_window_shots[right_i], feature_weights)
+def window_similarity(left_window_shots: list[list[FeatureVector]], right_window_shots: list[list[FeatureVector]], feature_weights: FeatureWeights, feature_quantization_levels: int) -> float:
+    if left_window_shots == right_window_shots:
+        # if they are literally the same window with the same shots (the same object), then obviously their similarity is 1.0
+        print("WARNING: used window_similarity function to compare identical window objects, this is likely not intended behaviour")
+        return 1.0
+
+    shot_similarity_sum: float = 0.0
+    for left_window_shot in left_window_shots:
+        for right_window_shot in right_window_shots:
+            shot_similarity_sum += shot_similarity(left_window_shot, right_window_shot, feature_weights, feature_quantization_levels)
 
     window_similarity: float = shot_similarity_sum / (len(left_window_shots) * len(right_window_shots))
 
+    assert window_similarity >= 0.0
+    assert window_similarity <= 1.0
+
     return window_similarity
 
-def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights) -> Generator[float, None, None]:
+def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> Generator[float, None, None]:
     assert left_window_size > 0
     assert right_window_size > 0
     total_shot_count: int = video_total_shot_count(shots_csv_path)
@@ -208,7 +228,7 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
     right_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, right_window_size))
     assert len(right_window_shots) == right_window_size
     assert left_window_shots != right_window_shots
-    yield window_similarity(left_window_shots, right_window_shots, feature_weights)
+    yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
     for i in tqdm(range(sliding_window_count), desc="Computing Window Similarities", total=sliding_window_count):
         left_window_shots.pop(0)
         left_window_shots.append(right_window_shots.pop(0))
@@ -217,7 +237,7 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
         assert len(right_window_shots) == right_window_size
         assert left_window_shots != right_window_shots
 
-        yield window_similarity(left_window_shots, right_window_shots, feature_weights)
+        yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
 
 def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
@@ -293,6 +313,7 @@ if __name__ == "__main__":
     assert right_window_size > 0, "right window size must be greater than 0"
 
     with open("video_window_similarities.txt", "w") as file:
-        for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS):
+        for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS):
             file.write(f"video_window_similarity: {video_window_similarity}\n")
             file.flush()
+            # TODO: save similarities and plot histogram to determine a good quantization level
