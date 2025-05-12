@@ -1,6 +1,5 @@
 from PIL import Image
 import numpy as np
-from scipy.stats import skew, kurtosis
 from collections.abc import Callable, Iterable, Generator
 import math
 import argparse
@@ -9,11 +8,15 @@ import os
 from tqdm import tqdm
 import csv
 from itertools import islice
+from typing import TypeVar
 
 # TODO: need some ground truth to be able to do:
 # TODO: need to train something to determine good feature weights, could do GA
 
-FEATURE_WEIGHTS: tuple[float, ...] = (
+FeatureVector = tuple[float, ...]
+FeatureWeights = tuple[float, ...]
+
+FEATURE_WEIGHTS: FeatureWeights = (
     0.10,
     0.16,
     0.10,
@@ -25,14 +28,16 @@ FEATURE_WEIGHTS: tuple[float, ...] = (
     0.08
 )
 
-def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image], feature_weights: tuple[float, ...]) -> float:
+T = TypeVar("T")
+
+def shot_similarity(shot_1: Iterable[FeatureVector], shot_2: Iterable[FeatureVector], feature_weights: FeatureWeights) -> float:
     # sum of frame matches between shots,
     # divided by the number of frames in the shorter of the shots
     assert sum(feature_weights) > 0.999 and sum(feature_weights) < 1.001, \
         "feature_weights should sum up to 1, but summed to {}".format(sum(feature_weights))
 
-    shot_1_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame_feature_vector(frame)]) for frame in shot_1]
-    shot_2_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame_feature_vector(frame)]) for frame in shot_2]
+    shot_1_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame]) for frame in shot_1]
+    shot_2_frame_feature_values: list[tuple[bool, ...]] = [tuple([binarize_float(value) for value in frame]) for frame in shot_2]
 
     min_of_shot_lengths: int = min(len(shot_1_frame_feature_values), len(shot_2_frame_feature_values))
     assert min_of_shot_lengths > 0, "shots must have more than 0 frames. shot_1: {} frames, shot_2: {} frames".format(len(shot_1_frame_feature_values), len(shot_2_frame_feature_values))
@@ -55,11 +60,11 @@ def shot_similarity(shot_1: Iterable[Image.Image], shot_2: Iterable[Image.Image]
 
     return shot_similarity
 
-def frame_feature_vector(frame: Image.Image) -> tuple[float, ...]:
+def frame_feature_vector(frame: Image.Image) -> FeatureVector:
     f1cm: tuple[float, float, float] = frame_first_colour_moment(frame)
     f2cm: tuple[float, float, float] = frame_second_colour_moment(frame)
     ffd: tuple[float, float, float] = frame_fractal_dimension(frame)
-    feature_vector: tuple[float, ...] = (
+    feature_vector: FeatureVector = (
         f1cm[0],
         f1cm[1],
         f1cm[2],
@@ -180,7 +185,7 @@ def fractal_dimension(Z: np.ndarray) -> float:
 
     return fractal_dimension
 
-def window_similarity(left_window_shots: list[list[Image.Image]], right_window_shots: list[list[Image.Image]], feature_weights: tuple[float, ...]) -> float:
+def window_similarity(left_window_shots: list[list[FeatureVector]], right_window_shots: list[list[FeatureVector]], feature_weights: FeatureWeights) -> float:
     shot_similarity_sum: float = 0
     for left_i in range(len(left_window_shots)):
         for right_i in range(len(right_window_shots)):
@@ -190,16 +195,16 @@ def window_similarity(left_window_shots: list[list[Image.Image]], right_window_s
 
     return window_similarity
 
-def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: tuple[float, ...]) -> Generator[float, None, None]:
+def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights) -> Generator[float, None, None]:
     total_shot_count: int = video_total_shot_count(shots_csv_path)
     sliding_window_count: int = total_shot_count - left_window_size - right_window_size + 1
-    frames: Iterable[Image.Image] = video_to_frames(video_path)
+    frames: Iterable[tuple[float, ...]] = video_to_frame_feature_vectors(video_path)
     shot_frame_ranges: Iterable[tuple[int, int]] = video_shot_frame_ranges(shots_csv_path)
-    shot_frames: Iterable[list[Image.Image]] = video_shot_frames(frames, shot_frame_ranges)
+    shot_frames: Iterable[list[tuple[float, ...]]] = video_shot_frames(frames, shot_frame_ranges)
 
-    left_window_shots: list[list[Image.Image]] = list(islice(shot_frames, left_window_size))
+    left_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, left_window_size))
     assert len(left_window_shots) > 0
-    right_window_shots: list[list[Image.Image]] = list(islice(shot_frames, right_window_size))
+    right_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, right_window_size))
     assert len(right_window_shots) > 0
     yield window_similarity(left_window_shots, right_window_shots, feature_weights)
     for i in tqdm(range(sliding_window_count), desc="Computing Window Similarities", total=sliding_window_count):
@@ -227,6 +232,10 @@ def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
 
     video.release()
 
+def video_to_frame_feature_vectors(video_path: str) -> Generator[tuple[float, ...], None, None]:
+    for frame in video_to_frames(video_path):
+        yield frame_feature_vector(frame)
+
 def video_total_frame_count(video_path: str) -> int:
     video = cv2.VideoCapture(video_path)
     total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -250,13 +259,13 @@ def video_total_shot_count(shots_csv_path: str) -> int:
 
     return shot_count
 
-def video_shot_frames(frames: Iterable[Image.Image], shot_frame_ranges: Iterable[tuple[int, int]]) -> Generator[list[Image.Image], None, None]:
+def video_shot_frames(frames: Iterable[T], shot_frame_ranges: Iterable[tuple[int, int]]) -> Generator[list[T], None, None]:
     last_shot_frame_end: int = -1
     for shot_frame_start, shot_frame_end in tqdm(shot_frame_ranges, desc="Grouping Frames into Shots"):
         assert shot_frame_start == last_shot_frame_end + 1
         shot_frame_count: int = shot_frame_end - shot_frame_start + 1
         assert shot_frame_count > 0
-        shot_frames: list[Image.Image] = list(islice(frames, shot_frame_count))
+        shot_frames: list[T] = list(islice(frames, shot_frame_count))
         last_shot_frame_end = shot_frame_end
 
         yield shot_frames
@@ -278,7 +287,7 @@ if __name__ == "__main__":
     right_window_size: int = args.right_window_size
     assert right_window_size > 0, "right window size must be greater than 0"
 
-    for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS):
-        print(video_window_similarity)
-
-# TODO: some calculations are performed multiple times on the same information, optimize to avoid recalculating
+    with open("video_window_similarities.txt", "w") as file:
+        for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS):
+            file.write(f"video_window_similarity: {video_window_similarity}\n")
+            file.flush()
