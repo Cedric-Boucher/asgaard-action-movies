@@ -234,10 +234,10 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
     assert len(right_window_shots) == right_window_size
     assert left_window_shots != right_window_shots
     yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
-    for i in tqdm(range(sliding_window_count), desc="Computing Window Similarities", total=sliding_window_count):
+    for shot_frame in tqdm(shot_frames, desc="Computing Window Similarities", total=sliding_window_count):
         left_window_shots.pop(0)
         left_window_shots.append(right_window_shots.pop(0))
-        right_window_shots.append(next(shot_frames))
+        right_window_shots.append(shot_frame)
         assert len(left_window_shots) == left_window_size
         assert len(right_window_shots) == right_window_size
         assert left_window_shots != right_window_shots
