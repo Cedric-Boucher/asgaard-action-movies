@@ -196,23 +196,26 @@ def window_similarity(left_window_shots: list[list[FeatureVector]], right_window
     return window_similarity
 
 def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights) -> Generator[float, None, None]:
+    assert left_window_size > 0
+    assert right_window_size > 0
     total_shot_count: int = video_total_shot_count(shots_csv_path)
     sliding_window_count: int = total_shot_count - left_window_size - right_window_size + 1
     frames: Iterable[tuple[float, ...]] = video_to_frame_feature_vectors(video_path)
-    shot_frame_ranges: Iterable[tuple[int, int]] = video_shot_frame_ranges(shots_csv_path)
-    shot_frames: Iterable[list[tuple[float, ...]]] = video_shot_frames(frames, shot_frame_ranges)
+    shot_frames: Iterable[list[tuple[float, ...]]] = video_shot_frames(frames, shots_csv_path)
 
     left_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, left_window_size))
-    assert len(left_window_shots) > 0
+    assert len(left_window_shots) == left_window_size
     right_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, right_window_size))
-    assert len(right_window_shots) > 0
+    assert len(right_window_shots) == right_window_size
+    assert left_window_shots != right_window_shots
     yield window_similarity(left_window_shots, right_window_shots, feature_weights)
     for i in tqdm(range(sliding_window_count), desc="Computing Window Similarities", total=sliding_window_count):
         left_window_shots.pop(0)
         left_window_shots.append(right_window_shots.pop(0))
         right_window_shots.append(next(shot_frames))
-        assert len(left_window_shots) > 0
-        assert len(right_window_shots) > 0
+        assert len(left_window_shots) == left_window_size
+        assert len(right_window_shots) == right_window_size
+        assert left_window_shots != right_window_shots
 
         yield window_similarity(left_window_shots, right_window_shots, feature_weights)
 
@@ -259,9 +262,11 @@ def video_total_shot_count(shots_csv_path: str) -> int:
 
     return shot_count
 
-def video_shot_frames(frames: Iterable[T], shot_frame_ranges: Iterable[tuple[int, int]]) -> Generator[list[T], None, None]:
+def video_shot_frames(frames: Iterable[T], shots_csv_path: str) -> Generator[list[T], None, None]:
+    shot_frame_ranges: Iterable[tuple[int, int]] = video_shot_frame_ranges(shots_csv_path)
+    total_shot_count: int = video_total_shot_count(shots_csv_path)
     last_shot_frame_end: int = -1
-    for shot_frame_start, shot_frame_end in tqdm(shot_frame_ranges, desc="Grouping Frames into Shots"):
+    for shot_frame_start, shot_frame_end in tqdm(shot_frame_ranges, desc="Grouping Frames into Shots", total=total_shot_count):
         assert shot_frame_start == last_shot_frame_end + 1
         shot_frame_count: int = shot_frame_end - shot_frame_start + 1
         assert shot_frame_count > 0
