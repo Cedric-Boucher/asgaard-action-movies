@@ -9,6 +9,7 @@ from tqdm import tqdm
 import csv
 from itertools import islice
 from typing import TypeVar
+import matplotlib.pyplot as plt
 
 # TODO: need some ground truth to be able to do:
 # TODO: need to train something to determine good feature weights and quantization levels, could do GA
@@ -312,8 +313,27 @@ if __name__ == "__main__":
     right_window_size: int = args.right_window_size
     assert right_window_size > 0, "right window size must be greater than 0"
 
+    window_similarities: list[float] = list()
     with open("video_window_similarities.txt", "w") as file:
         for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS):
             file.write(f"video_window_similarity: {video_window_similarity}\n")
             file.flush()
-            # TODO: save similarities and plot histogram to determine a good quantization level
+            window_similarities.append(video_window_similarity)
+
+    # TODO: plot histogram to determine a good quantization level
+    plt.figure(figsize=(36.0, 18.0))
+    plt.plot(window_similarities)
+    plt.xticks(np.arange(0, len(window_similarities)+0.1, 30), minor = False)
+    plt.xticks(np.arange(0, len(window_similarities)+0.1, 10), minor = True)
+    plt.yticks(np.arange(0, 1.001, 0.2), minor = False)
+    plt.yticks(np.arange(0, 1.001, 0.1), minor = True)
+    plt.grid(True, "major", "y", linewidth = 2, alpha = 0.5)
+    plt.grid(True, "minor", "y", linewidth = 2, alpha = 0.1)
+    plt.grid(True, "major", "x", linewidth = 2, alpha = 0.5)
+    plt.grid(True, "minor", "x", linewidth = 2, alpha = 0.1)
+    plt.xlabel("Shot #")
+    plt.ylabel("Window Similarity (0-1)")
+    plt.title("Window Similarity Over the Video")
+    plt.savefig("window_similarities_line_plot.webp", format="webp", pil_kwargs={'lossless': True}, dpi=200)
+
+# TODO: some additional speedup could still be obtained, since frame features are compared (with LCS) multiple times as windows of size >1 slide
