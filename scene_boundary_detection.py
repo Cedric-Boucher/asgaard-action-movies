@@ -12,7 +12,6 @@ from typing import TypeVar, Optional
 import matplotlib.pyplot as plt
 import threading
 import queue
-from time import sleep
 
 # TODO: need some ground truth to be able to do:
 # TODO: need to train something to determine good feature weights and quantization levels, could do GA
