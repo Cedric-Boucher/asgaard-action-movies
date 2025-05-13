@@ -194,6 +194,9 @@ def fractal_dimension(Z: np.ndarray) -> float:
     if len(counts) < 2:
         return 0.0 # not enough data to fit a polynomial
 
+    if len(sizes) != len(counts):
+        return 0.0 # invalid data
+
     coeffs = np.polynomial.polynomial.Polynomial.fit(np.log(sizes), np.log(counts), 1).convert().coef
 
     fractal_dimension = -coeffs[0] if not math.isnan(-coeffs[0]) else 0.0
