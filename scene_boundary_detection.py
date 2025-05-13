@@ -8,7 +8,7 @@ import os
 from tqdm import tqdm
 import csv
 from itertools import islice
-from typing import TypeVar, Optional, Generic
+from typing import TypeVar, Optional
 import matplotlib.pyplot as plt
 import multiprocessing
 
