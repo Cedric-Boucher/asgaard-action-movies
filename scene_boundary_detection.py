@@ -8,8 +8,11 @@ import os
 from tqdm import tqdm
 import csv
 from itertools import islice
-from typing import TypeVar
+from typing import TypeVar, Optional
 import matplotlib.pyplot as plt
+import threading
+import queue
+from time import sleep
 
 # TODO: need some ground truth to be able to do:
 # TODO: need to train something to determine good feature weights and quantization levels, could do GA
@@ -34,6 +37,8 @@ FEATURE_QUANTIZATION_LEVELS: int = 16
 PLOT_FIGURE_SIZE_INCHES: tuple[float, float] = (36.0, 18.0)
 PLOT_FIGURE_DPI: int = 200
 PLOT_HISTOGRAM_NUMBER_OF_BINS: int = 20
+
+FRAME_FEATURE_BUFFER_SIZE: int = 10000
 
 T = TypeVar("T")
 
@@ -220,12 +225,12 @@ def window_similarity(left_window_shots: list[list[FeatureVector]], right_window
 
     return window_similarity
 
-def video_window_similarities(video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> Generator[float, None, None]:
+def video_window_similarities(frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]], results_queue: queue.Queue[Optional[float]], shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
     assert left_window_size > 0
     assert right_window_size > 0
     total_shot_count: int = video_total_shot_count(shots_csv_path)
     sliding_window_count: int = total_shot_count - left_window_size - right_window_size + 1
-    frames: Iterable[tuple[float, ...]] = video_to_frame_feature_vectors(video_path)
+    frames: Iterable[tuple[float, ...]] = queue_to_iterator(frame_feature_vectors_queue)
     shot_frames: Iterable[list[tuple[float, ...]]] = video_shot_frames(frames, shots_csv_path)
 
     left_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, left_window_size))
@@ -233,7 +238,7 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
     right_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, right_window_size))
     assert len(right_window_shots) == right_window_size
     assert left_window_shots != right_window_shots
-    yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
+    results_queue.put(window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels))
     for shot_frame in tqdm(shot_frames, desc="Computing Window Similarities", total=sliding_window_count):
         left_window_shots.pop(0)
         left_window_shots.append(right_window_shots.pop(0))
@@ -243,10 +248,26 @@ def video_window_similarities(video_path: str, shots_csv_path: str, left_window_
         assert left_window_shots != right_window_shots
 
         try:
-            yield window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels)
+            results_queue.put(window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels))
         except Exception as e:
             print(e)
+            results_queue.put(None)
             return
+
+    results_queue.put(None)
+
+def threaded_video_window_similarities(results_queue: queue.Queue[Optional[float]], video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
+    assert left_window_size > 0
+    assert right_window_size > 0
+
+    frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]] = queue.Queue(maxsize=FRAME_FEATURE_BUFFER_SIZE)
+    producer_thread: threading.Thread = threading.Thread(target=video_to_frame_feature_vectors, args=(video_path, frame_feature_vectors_queue))
+    consumer_thread: threading.Thread = threading.Thread(target=video_window_similarities, args=(frame_feature_vectors_queue, results_queue, shots_csv_path, left_window_size, right_window_size, feature_weights, feature_quantization_levels))
+
+    producer_thread.start()
+    consumer_thread.start()
+    producer_thread.join()
+    consumer_thread.join()    
 
 def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
@@ -264,9 +285,10 @@ def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
 
     video.release()
 
-def video_to_frame_feature_vectors(video_path: str) -> Generator[tuple[float, ...], None, None]:
+def video_to_frame_feature_vectors(video_path: str, frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]]) -> None:
     for frame in video_to_frames(video_path):
-        yield frame_feature_vector(frame)
+        frame_feature_vectors_queue.put(frame_feature_vector(frame))
+    frame_feature_vectors_queue.put(None)
 
 def video_total_frame_count(video_path: str) -> int:
     video = cv2.VideoCapture(video_path)
@@ -304,6 +326,13 @@ def video_shot_frames(frames: Iterable[T], shots_csv_path: str) -> Generator[lis
 
         yield shot_frames
 
+def queue_to_iterator(q: queue.Queue[Optional[T]]) -> Generator[T, None, None]:
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        yield item
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
@@ -321,12 +350,18 @@ if __name__ == "__main__":
     right_window_size: int = args.right_window_size
     assert right_window_size > 0, "right window size must be greater than 0"
 
+    window_similarities_queue: queue.Queue[Optional[float]] = queue.Queue()
+    consumer_thread = threading.Thread(target=threaded_video_window_similarities, args=(window_similarities_queue, video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS))
+    consumer_thread.start()
+
     window_similarities: list[float] = list()
     with open("video_window_similarities.txt", "w") as file:
-        for video_window_similarity in video_window_similarities(video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS):
+        for video_window_similarity in queue_to_iterator(window_similarities_queue):
             file.write(f"{video_window_similarity}\n")
             file.flush()
             window_similarities.append(video_window_similarity)
+
+    consumer_thread.join()
 
     # TODO: plot histogram to determine a good quantization level
     plt.figure(figsize=PLOT_FIGURE_SIZE_INCHES)
