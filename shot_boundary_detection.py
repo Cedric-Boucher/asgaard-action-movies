@@ -4,108 +4,89 @@ import torch
 import argparse
 import cv2
 from PIL import Image
-from itertools import islice
 import os
 import csv
-import time
 from tqdm import tqdm
 import pandas as pd
 from ffmpeg import FFmpeg
 import json
+from collections.abc import Iterable, Generator
+from typing import Any, Optional
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-def video_to_pil_frames(video_path):
-    print(f"Fetching Frames: {video_path}")
-    video = cv2.VideoCapture(video_path)
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"Total Frames: {total_frames}")
+FRAME_BUFFER_SIZE: int = 3 # only keep up to this many frames in memory (buffer/queue)
+FRAME_VECTOR_BUFFER_SIZE: int = 10000
+COSINE_SIMILARITY_BUFFER_SIZE: int = 10000
 
-    for i in range(total_frames):
+def video_to_pil_frames(video_path) -> Generator[Image.Image, None, None]:
+    video = cv2.VideoCapture(video_path)
+    total_frames: int = video_total_frame_count(video_path)
+
+    for _ in tqdm(range(total_frames), desc="Fetching Frames", total=total_frames):
         ret, frame = video.read()
         if not ret:
             break
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image: Image.Image = Image.fromarray(frame_rgb)
-        
+
         yield pil_image  # Yield one frame at a time
 
     video.release()
 
-
-def batch_generator(iterable, batch_size):
-    iterator = iter(iterable)
-    while True:
-        batch = list(islice(iterator, batch_size))
-        if not batch:
-            break
-        yield batch
-
-def generate_frame_vectors(model_id="google/siglip-base-patch16-224", video_path=""):
+def generate_frame_vectors(video_path: str, model_id="google/siglip-base-patch16-224") -> Generator[torch.Tensor, None, None]:
     print(f"Using checkpoint:{model_id}")
-    model = SiglipVisionModel.from_pretrained(model_id,device_map=DEVICE)
+    model: SiglipVisionModel = SiglipVisionModel.from_pretrained(model_id,device_map=DEVICE)
     processor = AutoProcessor.from_pretrained(model_id)
-    start_time = time.time()
-    frames = video_to_pil_frames(video_path)
-    video = cv2.VideoCapture(video_path)
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    print("Processing Frames")
-    base_file_name_with_extension = os.path.basename(video_path)
-    base_file_name, _ = os.path.splitext(base_file_name_with_extension)
-    print("Generating Compressed Frame Vectors")
+    frames: Generator[Image.Image, None, None] = video_to_pil_frames(video_path)
+    total_frames: int = video_total_frame_count(video_path)
     for frame in tqdm(frames,desc="Generating Vectors", total=total_frames):
         inputs = processor(images=frame, return_tensors="pt").to(DEVICE)
         outputs = model(**inputs)
         for tensor in outputs.pooler_output:
             yield tensor.detach().flatten().reshape(1,-1)
 
-def compute_cosine_similarity(frames):
-    i=0
-    try:
-        next_frame = None
-        current_frame = None
-        while True:
-            if next_frame is None and current_frame is None:
-                current_frame = next(frames)
-                next_frame = next(frames)
-            assert current_frame is not None
-            assert next_frame is not None
-            similarity = torch.nn.functional.cosine_similarity(current_frame,next_frame).item()
-            yield (i,similarity)
-            current_frame = next_frame
-            next_frame = next(frames)
-            i = i + 1
-    except StopIteration:
-        print("End of frames Reached")
+def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count: int) -> Generator[tuple[int, int | float | bool], None, None]:
+    last_frame: Optional[torch.Tensor] = None
+    for i, frame in enumerate(tqdm(frames, desc="Computing Cosine Similarities", total=total_frame_count)):
+        if last_frame is None:
+            last_frame = frame
+            continue
 
-def generate_shots(cosine_similarities,threshold=0.9):
-    video = cv2.VideoCapture(video_path)
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    for entry in tqdm(cosine_similarities,desc="Detecting Shots", total=total_frames):
-        idx,similarities = entry
+        assert frame is not None
+        assert last_frame is not None
+        similarity: int | float | bool = torch.nn.functional.cosine_similarity(last_frame, frame).item()
+        yield (i-1, similarity)
+
+        last_frame = frame
+
+def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: Iterable[tuple[int, int | float | bool]], threshold: float) -> Generator[int, None, None]:
+    for i, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
         if similarities < threshold:
-            yield idx
+            yield i
 
-def process_shot_to_tuples(shots):
-    start = 0
-    for shot in shots:
-        entry = (start,shot)
+def shot_boundary_indices_to_tuples(shot_boundary_indices: Iterable[int]) -> Generator[tuple[int, int], None, None]:
+    last_shot_boundary_index: int = 0
+    for shot_boundary_index in shot_boundary_indices:
+        entry: tuple[int, int] = (last_shot_boundary_index, shot_boundary_index)
         yield entry
-        start = shot + 1
 
-def write_to_csv(shots,output_path):
+        last_shot_boundary_index = shot_boundary_index + 1
+
+def write_to_csv(shot_boundary_tuples: Iterable[tuple[int, int]], output_path: str) -> None:
     with open(output_path, "w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(["Start","End"])  # Header row
-        for row in shots:  # Iterate over the generator
+        writer.writerow(["Start", "End"])
+        for row in shot_boundary_tuples:
+            assert len(row) == 2, "shot boundary tuple should have contained 2 items"
             writer.writerow(row)
+            file.flush()
 
 def cut_video(video_path, frame_ranges, write_video=False):
     scene_list = []
     scene_list_seconds = []
-    list_shot_boundary = []
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     output_dir = os.path.join(os.path.dirname(video_path), base_name)
     os.makedirs(output_dir, exist_ok=True)
@@ -128,7 +109,7 @@ def cut_video(video_path, frame_ranges, write_video=False):
 def overlay_markers(video_path, shot_boundaries, output_path):
     cap = cv2.VideoCapture(video_path)
     os.makedirs(output_path, exist_ok=True)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames: int = video_total_frame_count(video_path)
     for frame_idx in tqdm(range(total_frames),desc="Writing Frames to Disk:", total=total_frames):
         ret, frame = cap.read()
         if not ret:
@@ -149,7 +130,6 @@ def get_key_shot_frame(shot_boundaries,frame_vectors):
         _, min_idx = torch.min(frame_vector_distances, 0)
         yield (start + min_idx).item()
 
-
 def write_key_shots(key_shots,output_path):
     with open(output_path, "w", newline="") as file:
         writer = csv.writer(file)
@@ -160,7 +140,7 @@ def write_key_shots(key_shots,output_path):
 def fetch_key_shots(key_shot_frames,video_path):
     print(f"Fetching Frames: {video_path}")
     video = cv2.VideoCapture(video_path)
-    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_frames: int = video_total_frame_count(video_path)
     print(f"Total Frames: {total_frames}")
 
     for i in range(total_frames):
@@ -175,10 +155,10 @@ def fetch_key_shots(key_shot_frames,video_path):
             continue
     video.release()
 
-def convert_seconds(seconds):
+def convert_seconds(seconds: float | int) -> str:
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
-    remaining_seconds = seconds % 60  # Keep decimal precision if needed
+    remaining_seconds: float | int = seconds % 60  # Keep decimal precision if needed
 
     return f"{hours:02}:{minutes:02}:{remaining_seconds:06.3f}"
 
@@ -193,6 +173,12 @@ def convert_frame_file_to_seconds(shots_file_csv,video_path,output_path):
     df["End Time"] = df["End Time"].apply(convert_seconds)
     df.to_csv(output_path,index=False)
 
+def video_total_frame_count(video_path: str) -> int:
+    video = cv2.VideoCapture(video_path)
+    total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    return total_frames
+
 
 if __name__=="__main__":
     print(f"device:{DEVICE}")
@@ -204,16 +190,19 @@ if __name__=="__main__":
     args = parser.parse_args()
     video_path = args.video
     threshold = args.threshold
-    frames = generate_frame_vectors(video_path=video_path)
-    similarities = compute_cosine_similarity(frames)
-    shots = generate_shots(cosine_similarities=similarities,threshold=threshold)
+    total_frame_count: int = video_total_frame_count(video_path)
+    frames = generate_frame_vectors(video_path)
+    similarities = compute_cosine_similarity(frames, total_frame_count)
+    shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
     base_name = os.path.splitext(os.path.basename(video_path))[0]
-    shot_tuples = list(process_shot_to_tuples(shots))  # Convert generator to list
+    shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
     write_to_csv(shot_tuples, base_name+".csv")
     convert_frame_file_to_seconds(base_name+".csv",video_path,base_name+".csv")
     if args.write_frames is not None:
         os.makedirs(os.path.dirname(args.write_frames), exist_ok=True)
         overlay_markers(video_path, shot_tuples, base_name)
     if args.key_shots:
-        key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path=video_path))))
+        key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
         write_key_shots(key_shots,base_name+"_shots.csv")
+
+# TODO: could improve performance by fetching frames and generating vectors in separate processes
