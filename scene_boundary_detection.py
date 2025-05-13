@@ -40,6 +40,8 @@ FRAME_FEATURE_BUFFER_SIZE: int = 10000
 
 T = TypeVar("T")
 
+FRAME_EXTRACTION_LIMIT: int | None = None # to shorten total running time for testing purposes
+
 def shot_similarity(shot_1: Iterable[FeatureVector], shot_2: Iterable[FeatureVector], feature_weights: FeatureWeights, feature_quantization_levels: int) -> float:
     # sum of frame matches between shots,
     # divided by the number of frames in the shorter of the shots
@@ -284,8 +286,12 @@ def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video.release()
 
 def video_to_frame_feature_vectors(video_path: str, frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]") -> None:
+    i: int = 0
     for frame in video_to_frames(video_path):
         frame_feature_vectors_queue.put(frame_feature_vector(frame))
+        i += 1
+        if FRAME_EXTRACTION_LIMIT is not None and i == FRAME_EXTRACTION_LIMIT:
+            break
     frame_feature_vectors_queue.put(None)
 
 def video_total_frame_count(video_path: str) -> int:
