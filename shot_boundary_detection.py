@@ -17,7 +17,7 @@ from torch import multiprocessing
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 try:
-    multiprocessing.set_start_method('fork')
+    multiprocessing.set_start_method('spawn')
 except RuntimeError:
     pass
 
