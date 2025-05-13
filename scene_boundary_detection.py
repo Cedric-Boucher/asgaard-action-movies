@@ -8,10 +8,9 @@ import os
 from tqdm import tqdm
 import csv
 from itertools import islice
-from typing import TypeVar, Optional
+from typing import TypeVar, Optional, Generic
 import matplotlib.pyplot as plt
-import threading
-import queue
+import multiprocessing
 
 # TODO: need some ground truth to be able to do:
 # TODO: need to train something to determine good feature weights and quantization levels, could do GA
@@ -224,7 +223,7 @@ def window_similarity(left_window_shots: list[list[FeatureVector]], right_window
 
     return window_similarity
 
-def video_window_similarities(frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]], results_queue: queue.Queue[Optional[float]], shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
+def video_window_similarities(frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]", results_queue: "multiprocessing.Queue[Optional[float]]", shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
     assert left_window_size > 0
     assert right_window_size > 0
     total_shot_count: int = video_total_shot_count(shots_csv_path)
@@ -255,18 +254,18 @@ def video_window_similarities(frame_feature_vectors_queue: queue.Queue[Optional[
 
     results_queue.put(None)
 
-def threaded_video_window_similarities(results_queue: queue.Queue[Optional[float]], video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
+def threaded_video_window_similarities(results_queue: "multiprocessing.Queue[Optional[float]]", video_path: str, shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
     assert left_window_size > 0
     assert right_window_size > 0
 
-    frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]] = queue.Queue(maxsize=FRAME_FEATURE_BUFFER_SIZE)
-    producer_thread: threading.Thread = threading.Thread(target=video_to_frame_feature_vectors, args=(video_path, frame_feature_vectors_queue))
-    consumer_thread: threading.Thread = threading.Thread(target=video_window_similarities, args=(frame_feature_vectors_queue, results_queue, shots_csv_path, left_window_size, right_window_size, feature_weights, feature_quantization_levels))
+    frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]" = multiprocessing.Queue(maxsize=FRAME_FEATURE_BUFFER_SIZE)
+    producer_process: multiprocessing.Process = multiprocessing.Process(target=video_to_frame_feature_vectors, args=(video_path, frame_feature_vectors_queue))
+    consumer_process: multiprocessing.Process = multiprocessing.Process(target=video_window_similarities, args=(frame_feature_vectors_queue, results_queue, shots_csv_path, left_window_size, right_window_size, feature_weights, feature_quantization_levels))
 
-    producer_thread.start()
-    consumer_thread.start()
-    producer_thread.join()
-    consumer_thread.join()    
+    producer_process.start()
+    consumer_process.start()
+    producer_process.join()
+    consumer_process.join()    
 
 def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
@@ -284,7 +283,7 @@ def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
 
     video.release()
 
-def video_to_frame_feature_vectors(video_path: str, frame_feature_vectors_queue: queue.Queue[Optional[tuple[float, ...]]]) -> None:
+def video_to_frame_feature_vectors(video_path: str, frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]") -> None:
     for frame in video_to_frames(video_path):
         frame_feature_vectors_queue.put(frame_feature_vector(frame))
     frame_feature_vectors_queue.put(None)
@@ -325,7 +324,7 @@ def video_shot_frames(frames: Iterable[T], shots_csv_path: str) -> Generator[lis
 
         yield shot_frames
 
-def queue_to_iterator(q: queue.Queue[Optional[T]]) -> Generator[T, None, None]:
+def queue_to_iterator(q: "multiprocessing.Queue[Optional[T]]") -> Generator[T, None, None]:
     while True:
         item = q.get()
         if item is None:
@@ -349,9 +348,9 @@ if __name__ == "__main__":
     right_window_size: int = args.right_window_size
     assert right_window_size > 0, "right window size must be greater than 0"
 
-    window_similarities_queue: queue.Queue[Optional[float]] = queue.Queue()
-    consumer_thread = threading.Thread(target=threaded_video_window_similarities, args=(window_similarities_queue, video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS))
-    consumer_thread.start()
+    window_similarities_queue: "multiprocessing.Queue[Optional[float]]" = multiprocessing.Queue()
+    consumer_process = multiprocessing.Process(target=threaded_video_window_similarities, args=(window_similarities_queue, video_path, shots_csv_path, left_window_size, right_window_size, FEATURE_WEIGHTS, FEATURE_QUANTIZATION_LEVELS))
+    consumer_process.start()
 
     window_similarities: list[float] = list()
     with open("video_window_similarities.txt", "w") as file:
@@ -360,7 +359,7 @@ if __name__ == "__main__":
             file.flush()
             window_similarities.append(video_window_similarity)
 
-    consumer_thread.join()
+    consumer_process.join()
 
     # TODO: plot histogram to determine a good quantization level
     plt.figure(figsize=PLOT_FIGURE_SIZE_INCHES)
