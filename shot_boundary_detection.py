@@ -28,7 +28,7 @@ def video_to_pil_frames(video_path):
             break
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(frame_rgb)
+        pil_image: Image.Image = Image.fromarray(frame_rgb)
         
         yield pil_image  # Yield one frame at a time
 
@@ -83,7 +83,7 @@ def compute_cosine_similarity(frames):
 def generate_shots(cosine_similarities,threshold=0.9):
     video = cv2.VideoCapture(video_path)
     total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-    for entry in tqdm(compute_cosine_similarity(frames),desc="Detecting Shots", total=total_frames):
+    for entry in tqdm(cosine_similarities,desc="Detecting Shots", total=total_frames):
         idx,similarities = entry
         if similarities < threshold:
             yield idx
