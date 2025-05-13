@@ -11,20 +11,28 @@ import pandas as pd
 from ffmpeg import FFmpeg
 import json
 from collections.abc import Iterable, Generator
-from typing import Any, Optional
-
+from typing import Optional, TypeVar
+from torch import multiprocessing
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-FRAME_BUFFER_SIZE: int = 3 # only keep up to this many frames in memory (buffer/queue)
+try:
+    multiprocessing.set_start_method('fork')
+except RuntimeError:
+    pass
+
+FRAME_BUFFER_SIZE: int = 10 # only keep up to this many frames in memory (buffer/queue)
 FRAME_VECTOR_BUFFER_SIZE: int = 10000
 COSINE_SIMILARITY_BUFFER_SIZE: int = 10000
 
-def video_to_pil_frames(video_path) -> Generator[Image.Image, None, None]:
+T = TypeVar("T")
+
+
+def extract_frames_from_video(video_path: str, frame_queue: "multiprocessing.Queue[Optional[Image.Image]]") -> None:
     video = cv2.VideoCapture(video_path)
     total_frames: int = video_total_frame_count(video_path)
 
-    for _ in tqdm(range(total_frames), desc="Fetching Frames", total=total_frames):
+    for _ in tqdm(range(total_frames), desc="Fetching Frames", total=total_frames, position=0):
         ret, frame = video.read()
         if not ret:
             break
@@ -32,25 +40,27 @@ def video_to_pil_frames(video_path) -> Generator[Image.Image, None, None]:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image: Image.Image = Image.fromarray(frame_rgb)
 
-        yield pil_image  # Yield one frame at a time
+        frame_queue.put(pil_image)
 
     video.release()
+    frame_queue.put(None)
 
-def generate_frame_vectors(video_path: str, model_id="google/siglip-base-patch16-224") -> Generator[torch.Tensor, None, None]:
-    print(f"Using checkpoint:{model_id}")
-    model: SiglipVisionModel = SiglipVisionModel.from_pretrained(model_id,device_map=DEVICE)
-    processor = AutoProcessor.from_pretrained(model_id)
-    frames: Generator[Image.Image, None, None] = video_to_pil_frames(video_path)
-    total_frames: int = video_total_frame_count(video_path)
-    for frame in tqdm(frames,desc="Generating Vectors", total=total_frames):
+def generate_frame_vectors(total_frames: int, frame_queue: "multiprocessing.Queue[Optional[Image.Image]]", frame_vector_queue: "multiprocessing.Queue[Optional[torch.Tensor]]", model_id="google/siglip-base-patch16-224") -> None:
+    model: SiglipVisionModel = SiglipVisionModel.from_pretrained(model_id, device_map=DEVICE)
+    processor = AutoProcessor.from_pretrained(model_id, use_fast=False)
+    frames: Iterable[Image.Image] = queue_to_iterator(frame_queue)
+    for frame in tqdm(frames, desc="Generating Vectors", total=total_frames, position=1):
         inputs = processor(images=frame, return_tensors="pt").to(DEVICE)
         outputs = model(**inputs)
         for tensor in outputs.pooler_output:
-            yield tensor.detach().flatten().reshape(1,-1)
+            frame_vector_queue.put(tensor.detach().flatten().reshape(1,-1))
 
-def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count: int) -> Generator[tuple[int, int | float | bool], None, None]:
+    frame_vector_queue.put(None)
+
+def compute_cosine_similarity(total_frame_count: int, frame_vector_queue: "multiprocessing.Queue[Optional[torch.Tensor]]", cosine_similarity_queue: "multiprocessing.Queue[Optional[tuple[int, int | float | bool]]]") -> None:
+    frames: Iterable[torch.Tensor] = queue_to_iterator(frame_vector_queue)
     last_frame: Optional[torch.Tensor] = None
-    for i, frame in enumerate(tqdm(frames, desc="Computing Cosine Similarities", total=total_frame_count)):
+    for i, frame in enumerate(tqdm(frames, desc="Computing Cosine Similarities", total=total_frame_count, position=2)):
         if last_frame is None:
             last_frame = frame
             continue
@@ -58,12 +68,15 @@ def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count:
         assert frame is not None
         assert last_frame is not None
         similarity: int | float | bool = torch.nn.functional.cosine_similarity(last_frame, frame).item()
-        yield (i-1, similarity)
+        cosine_similarity_queue.put((i-1, similarity))
 
         last_frame = frame
 
-def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: Iterable[tuple[int, int | float | bool]], threshold: float) -> Generator[int, None, None]:
-    for i, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
+    cosine_similarity_queue.put(None)
+
+def generate_shot_boundary_indices(total_frame_count: int, threshold: float, cosine_similarity_queue: "multiprocessing.Queue[Optional[tuple[int, int | float | bool]]]") -> Generator[int, None, None]:
+    cosine_similarities: Iterable[tuple[int, int | float | bool]] = queue_to_iterator(cosine_similarity_queue)
+    for i, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count, position=3):
         if similarities < threshold:
             yield i
 
@@ -138,10 +151,8 @@ def write_key_shots(key_shots,output_path):
             writer.writerow([shot])
 
 def fetch_key_shots(key_shot_frames,video_path):
-    print(f"Fetching Frames: {video_path}")
     video = cv2.VideoCapture(video_path)
     total_frames: int = video_total_frame_count(video_path)
-    print(f"Total Frames: {total_frames}")
 
     for i in range(total_frames):
         ret, frame = video.read()
@@ -179,9 +190,17 @@ def video_total_frame_count(video_path: str) -> int:
 
     return total_frames
 
+def queue_to_iterator(q: "multiprocessing.Queue[Optional[T]]") -> Generator[T, None, None]:
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        yield item
+
 
 if __name__=="__main__":
     print(f"device:{DEVICE}")
+    tqdm.set_lock(multiprocessing.RLock())
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
     parser.add_argument('--video', required=True, type=str, help="Video path")
     parser.add_argument('--threshold', required=True, type=float,help="Cosine Similarity Threshold")
@@ -190,18 +209,33 @@ if __name__=="__main__":
     args = parser.parse_args()
     video_path = args.video
     threshold = args.threshold
-    total_frame_count: int = video_total_frame_count(video_path)
-    frames = generate_frame_vectors(video_path)
-    similarities = compute_cosine_similarity(frames, total_frame_count)
-    shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
     base_name = os.path.splitext(os.path.basename(video_path))[0]
-    shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
+    total_frame_count: int = video_total_frame_count(video_path)
+
+    frame_queue: "multiprocessing.Queue[Optional[Image.Image]]" = multiprocessing.Queue(maxsize=FRAME_BUFFER_SIZE)
+    frame_producer_process = multiprocessing.Process(target=extract_frames_from_video, args=(video_path, frame_queue))
+    frame_producer_process.start()
+    frame_vector_queue: "multiprocessing.Queue[Optional[torch.Tensor]]" = multiprocessing.Queue(maxsize=FRAME_VECTOR_BUFFER_SIZE)
+    frame_consumer_vector_producer_process = multiprocessing.Process(target=generate_frame_vectors, args=(total_frame_count, frame_queue, frame_vector_queue))
+    frame_consumer_vector_producer_process.start()
+    cosine_similarity_queue: "multiprocessing.Queue[Optional[tuple[int, int | float | bool]]]" = multiprocessing.Queue(maxsize=COSINE_SIMILARITY_BUFFER_SIZE)
+    frame_vector_consumer_similarity_producer_process = multiprocessing.Process(target=compute_cosine_similarity, args=(total_frame_count, frame_vector_queue, cosine_similarity_queue))
+    frame_vector_consumer_similarity_producer_process.start()
+
+    shot_boundary_indices: Iterable[int] = generate_shot_boundary_indices(total_frame_count, threshold, cosine_similarity_queue)
+    shot_tuples: Iterable[tuple[int, int]] = shot_boundary_indices_to_tuples(shot_boundary_indices)
     write_to_csv(shot_tuples, base_name+".csv")
+
+    frame_producer_process.join()
+    frame_consumer_vector_producer_process.join()
+    frame_vector_consumer_similarity_producer_process.join()
+
     convert_frame_file_to_seconds(base_name+".csv",video_path,base_name+".csv")
     if args.write_frames is not None:
         os.makedirs(os.path.dirname(args.write_frames), exist_ok=True)
         overlay_markers(video_path, shot_tuples, base_name)
     if args.key_shots:
+        raise NotImplementedError()
         key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
         write_key_shots(key_shots,base_name+"_shots.csv")
 
