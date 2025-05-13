@@ -204,5 +204,3 @@ if __name__=="__main__":
     if args.key_shots:
         key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
         write_key_shots(key_shots,base_name+"_shots.csv")
-
-# TODO: could improve performance by fetching frames and generating vectors in separate processes
