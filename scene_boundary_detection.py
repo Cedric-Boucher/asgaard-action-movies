@@ -32,6 +32,8 @@ FEATURE_WEIGHTS: FeatureWeights = (
 
 FEATURE_QUANTIZATION_LEVELS: int = 16
 
+LOCAL_MEAN_SMOOTHING_WINDOW_SIZE: int = 3
+
 PLOT_FIGURE_SIZE_INCHES: tuple[float, float] = (36.0, 18.0)
 PLOT_FIGURE_DPI: int = 200
 PLOT_HISTOGRAM_NUMBER_OF_BINS: int = 20
@@ -340,6 +342,15 @@ def queue_to_iterator(q: "multiprocessing.Queue[Optional[T]]") -> Generator[T, N
             break
         yield item
 
+def local_mean_smoothing(data: list[float], window_size: int) -> list[float]:
+    assert isinstance(window_size, int)
+    assert window_size > 0
+    if window_size == 1:
+        return data
+    kernel = np.ones(window_size) / window_size
+    smoothed: list[float] = list(np.convolve(data, kernel, mode='same'))
+
+    return smoothed
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
@@ -370,9 +381,12 @@ if __name__ == "__main__":
 
     consumer_process.join()
 
-    # TODO: plot histogram to determine a good quantization level
+    smoothed_window_similarities: list[float] = local_mean_smoothing(window_similarities, LOCAL_MEAN_SMOOTHING_WINDOW_SIZE)
+
     plt.figure(figsize=PLOT_FIGURE_SIZE_INCHES)
     plt.plot(window_similarities)
+    plt.plot(smoothed_window_similarities)
+    plt.legend(("Window Similarities", "Smoothed Window Similarities"))
     plt.xticks(np.arange(0, len(window_similarities)+0.1, 30), minor = False)
     plt.xticks(np.arange(0, len(window_similarities)+0.1, 10), minor = True)
     plt.yticks(np.linspace(0, 1, 5), minor = False)
@@ -394,4 +408,4 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.savefig("window_similarities_histogram.webp", format="webp", pil_kwargs={'lossless': True}, dpi=PLOT_FIGURE_DPI)
 
-# TODO: some additional speedup could still be obtained, since frame features are compared (with LCS) multiple times as windows of size >1 slide
+# TODO: some additional efficiency could still be obtained, since frame features are compared (with LCS) multiple times as windows of size >1 slide
