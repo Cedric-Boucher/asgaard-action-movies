@@ -12,11 +12,12 @@ from typing import TypeVar, Optional
 import matplotlib.pyplot as plt
 import multiprocessing
 
-# TODO: need some ground truth to be able to do:
-# TODO: need to train something to determine good feature weights and quantization levels, could do GA
+# TODO: use ground truth to find:
+# best quantization levels with some reasonable feature weights, then
+# best feature weights with that quantization levels
 
-FeatureVector = tuple[float, ...]
-FeatureWeights = tuple[float, ...]
+FeatureVector = tuple[float, float, float, float, float, float, float, float, float]
+FeatureWeights = tuple[float, float, float, float, float, float, float, float, float]
 
 FEATURE_WEIGHTS: FeatureWeights = (
     0.10,
@@ -230,17 +231,17 @@ def window_similarity(left_window_shots: list[list[FeatureVector]], right_window
 
     return window_similarity
 
-def video_window_similarities(frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]", results_queue: "multiprocessing.Queue[Optional[float]]", shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
+def video_window_similarities(frame_feature_vectors_queue: "multiprocessing.Queue[Optional[FeatureVector]]", results_queue: "multiprocessing.Queue[Optional[float]]", shots_csv_path: str, left_window_size: int, right_window_size: int, feature_weights: FeatureWeights, feature_quantization_levels: int) -> None:
     assert left_window_size > 0
     assert right_window_size > 0
     total_shot_count: int = video_total_shot_count(shots_csv_path)
     sliding_window_count: int = total_shot_count - left_window_size - right_window_size + 1
-    frames: Iterable[tuple[float, ...]] = queue_to_iterator(frame_feature_vectors_queue)
-    shot_frames: Iterable[list[tuple[float, ...]]] = video_shot_frames(frames, shots_csv_path)
+    frames: Iterable[FeatureVector] = queue_to_iterator(frame_feature_vectors_queue)
+    shot_frames: Iterable[list[FeatureVector]] = video_shot_frames(frames, shots_csv_path)
 
-    left_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, left_window_size))
+    left_window_shots: list[list[FeatureVector]] = list(islice(shot_frames, left_window_size))
     assert len(left_window_shots) == left_window_size
-    right_window_shots: list[list[tuple[float, ...]]] = list(islice(shot_frames, right_window_size))
+    right_window_shots: list[list[FeatureVector]] = list(islice(shot_frames, right_window_size))
     assert len(right_window_shots) == right_window_size
     assert left_window_shots != right_window_shots
     results_queue.put(window_similarity(left_window_shots, right_window_shots, feature_weights, feature_quantization_levels))
@@ -291,12 +292,71 @@ def video_to_frames(video_path: str) -> Generator[Image.Image, None, None]:
     video.release()
 
 def video_to_frame_feature_vectors(video_path: str, frame_feature_vectors_queue: "multiprocessing.Queue[Optional[tuple[float, ...]]]") -> None:
-    i: int = 0
-    for frame in video_to_frames(video_path):
-        frame_feature_vectors_queue.put(frame_feature_vector(frame))
-        i += 1
-        if FRAME_EXTRACTION_LIMIT is not None and i == FRAME_EXTRACTION_LIMIT:
-            break
+    # uses a cache to skip loading frames and calculating features if it has already been done once
+    total_frame_count: int = video_total_frame_count(video_path)
+    video_name: str = os.path.splitext(os.path.basename(video_path))[0]
+    frame_feature_cache_path: str = f"./frame_feature_cache/{video_name}.csv"
+    os.makedirs(os.path.dirname(frame_feature_cache_path), exist_ok=True)
+    header: tuple[str, ...] = (
+        "Frame Index",
+        "First Colour Moment (R)",
+        "First Colour Moment (G)",
+        "First Colour Moment (B)",
+        "Second Colour Moment (R)",
+        "Second Colour Moment (G)",
+        "Second Colour Moment (B)",
+        "Fractal Dimension (R)",
+        "Fractal Dimension (G)",
+        "Fractal Dimension (B)"
+    )
+    try:
+        with open(frame_feature_cache_path, "r") as cache_file:
+            cache_reader = csv.reader(cache_file)
+            frame_counter: int = 0
+            feature_vectors: list[FeatureVector] = list()
+            for i, row in tqdm(enumerate(cache_reader), desc="Reading Cached Frame Features", total=total_frame_count):
+                if i == 0:
+                    assert tuple(row) == header # if the header is different, cache is likely invalid
+                    continue
+                assert len(row) == len(header)
+                frame_index: int = int(row[0])
+                assert frame_index == i-1
+                feature_vector: FeatureVector = (
+                    float(row[1]),
+                    float(row[2]),
+                    float(row[3]),
+                    float(row[4]),
+                    float(row[5]),
+                    float(row[6]),
+                    float(row[7]),
+                    float(row[8]),
+                    float(row[9])
+                )
+                assert len(row) == len(feature_vector)+1
+                feature_vectors.append(feature_vector) # cannot push to queue until we are sure the cache is valid
+                frame_counter += 1
+
+            assert frame_counter == total_frame_count # ensures that cache wasn't missing any frames
+            # cache is assumed to have been valid at this point, push all feature vectors to queue
+            [frame_feature_vectors_queue.put(feature_vector) for feature_vector in feature_vectors]
+    except:
+        # failed to read frame features from cache (whether because cache does not exist yet, or some other reason)
+        # clear cache for this video by opening for writing, and write cache
+        print("Frame feature cache invalid or non-existant, reading frames, computing features, and caching...")
+        with open(frame_feature_cache_path, "w", newline="") as cache_file:
+            cache_writer = csv.writer(cache_file)
+            cache_writer.writerow(header)
+            for i, frame in tqdm(enumerate(video_to_frames(video_path)), desc="Reading Frames and Computing Features", total=total_frame_count):
+                feature_vector: FeatureVector = frame_feature_vector(frame)
+                frame_feature_vectors_queue.put(feature_vector)
+                csv_row: list = [i]
+                csv_row.extend(feature_vector)
+                assert len(csv_row) == len(header)
+                cache_writer.writerow(csv_row)
+                cache_file.flush()
+                if FRAME_EXTRACTION_LIMIT is not None and i == FRAME_EXTRACTION_LIMIT:
+                    break
+
     frame_feature_vectors_queue.put(None)
 
 def video_total_frame_count(video_path: str) -> int:
@@ -409,3 +469,7 @@ if __name__ == "__main__":
     plt.savefig("window_similarities_histogram.webp", format="webp", pil_kwargs={'lossless': True}, dpi=PLOT_FIGURE_DPI)
 
 # TODO: some additional efficiency could still be obtained, since frame features are compared (with LCS) multiple times as windows of size >1 slide
+
+# TODO: ability to run script with multiple quantization levels / feature weights in parallel
+
+# TODO: could also cache LCS results between two frames
