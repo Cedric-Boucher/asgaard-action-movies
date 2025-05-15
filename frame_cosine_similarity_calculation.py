@@ -7,7 +7,6 @@ from PIL import Image
 import os
 import csv
 from tqdm import tqdm
-import pandas as pd
 from ffmpeg import FFmpeg
 import json
 from collections.abc import Iterable, Generator
@@ -62,28 +61,6 @@ def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count:
         yield (i-1, i, float(similarity))
 
         last_frame = frame
-
-def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: Iterable[tuple[int, int, float]], threshold: float) -> Generator[int, None, None]:
-    for i, _, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
-        if similarities < threshold:
-            yield i
-
-def shot_boundary_indices_to_tuples(shot_boundary_indices: Iterable[int]) -> Generator[tuple[int, int], None, None]:
-    last_shot_boundary_index: int = 0
-    for shot_boundary_index in shot_boundary_indices:
-        entry: tuple[int, int] = (last_shot_boundary_index, shot_boundary_index)
-        yield entry
-
-        last_shot_boundary_index = shot_boundary_index + 1
-
-def write_shot_boundary_tuples_to_csv(shot_boundary_tuples: Iterable[tuple[int, int]], output_path: str) -> None:
-    with open(output_path, "w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Start", "End"])
-        for row in shot_boundary_tuples:
-            assert len(row) == 2, "shot boundary tuple should have contained 2 items"
-            writer.writerow(row)
-            file.flush()
 
 def cut_video(video_path, frame_ranges, write_video=False):
     scene_list = []
@@ -163,17 +140,6 @@ def convert_seconds(seconds: float | int) -> str:
 
     return f"{hours:02}:{minutes:02}:{remaining_seconds:06.3f}"
 
-def convert_frame_file_to_seconds(shots_file_csv,video_path,output_path):
-    probe = json.loads(FFmpeg(executable="ffprobe").input(video_path, print_format="json", show_streams=None).execute())
-    video_streams = [stream for stream in probe['streams'] if stream['codec_type'] == 'video']
-    frame_rate = eval(video_streams[0]['r_frame_rate'])
-    df = pd.read_csv(shots_file_csv)
-    df["Start Time"] = df["Start"].apply(lambda x: x/frame_rate)
-    df["Start Time"] = df["Start Time"].apply(convert_seconds)
-    df["End Time"] = df["End"].apply(lambda x: x/frame_rate)
-    df["End Time"] = df["End Time"].apply(convert_seconds)
-    df.to_csv(output_path,index=False)
-
 def video_total_frame_count(video_path: str) -> int:
     video = cv2.VideoCapture(video_path)
     total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -209,10 +175,6 @@ if __name__=="__main__":
     cosine_similarities_csv_path: str = os.path.join(COSINE_SIMILARITY_CSV_DIRECTORY, base_name+"_cosine_similarities.csv")
     write_cosine_similarities_to_csv(similarities, cosine_similarities_csv_path)
     if False:
-        shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
-        shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
-        write_shot_boundary_tuples_to_csv(shot_tuples, base_name+".csv")
-        convert_frame_file_to_seconds(base_name+".csv",video_path,base_name+".csv")
         if args.write_frames is not None:
             os.makedirs(os.path.dirname(args.write_frames), exist_ok=True)
             overlay_markers(video_path, shot_tuples, base_name)
