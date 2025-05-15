@@ -44,7 +44,7 @@ def generate_frame_vectors(video_path: str, model_id="google/siglip-base-patch16
         for tensor in outputs.pooler_output:
             yield tensor.detach().flatten().reshape(1,-1)
 
-def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count: int) -> Generator[tuple[int, int | float | bool], None, None]:
+def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count: int) -> Generator[tuple[int, int, float], None, None]:
     last_frame: Optional[torch.Tensor] = None
     for i, frame in enumerate(tqdm(frames, desc="Computing Cosine Similarities", total=total_frame_count)):
         if last_frame is None:
@@ -54,12 +54,13 @@ def compute_cosine_similarity(frames: Iterable[torch.Tensor], total_frame_count:
         assert frame is not None
         assert last_frame is not None
         similarity: int | float | bool = torch.nn.functional.cosine_similarity(last_frame, frame).item()
-        yield (i-1, similarity)
+        assert isinstance(similarity, float)
+        yield (i-1, i, float(similarity))
 
         last_frame = frame
 
-def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: Iterable[tuple[int, int | float | bool]], threshold: float) -> Generator[int, None, None]:
-    for i, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
+def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: Iterable[tuple[int, int, float]], threshold: float) -> Generator[int, None, None]:
+    for i, _, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
         if similarities < threshold:
             yield i
 
@@ -71,7 +72,7 @@ def shot_boundary_indices_to_tuples(shot_boundary_indices: Iterable[int]) -> Gen
 
         last_shot_boundary_index = shot_boundary_index + 1
 
-def write_to_csv(shot_boundary_tuples: Iterable[tuple[int, int]], output_path: str) -> None:
+def write_shot_boundary_tuples_to_csv(shot_boundary_tuples: Iterable[tuple[int, int]], output_path: str) -> None:
     with open(output_path, "w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(["Start", "End"])
@@ -175,6 +176,17 @@ def video_total_frame_count(video_path: str) -> int:
 
     return total_frames
 
+def write_cosine_similarities_to_csv(cosine_similarities: Iterable[tuple[int, int, float]], output_path: str) -> None:
+    with open(output_path, "w", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["First Frame Index", "Second Frame Index", "Cosine Similarity"])
+        for first_frame_index, second_frame_index, cosine_similarity in cosine_similarities:
+            assert isinstance(first_frame_index, int)
+            assert isinstance(second_frame_index, int)
+            assert isinstance(cosine_similarity, float)
+            writer.writerow((first_frame_index, second_frame_index, cosine_similarity))
+            file.flush()
+
 
 if __name__=="__main__":
     print(f"device:{DEVICE}")
@@ -186,17 +198,23 @@ if __name__=="__main__":
     args = parser.parse_args()
     video_path = args.video
     threshold = args.threshold
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
     total_frame_count: int = video_total_frame_count(video_path)
     frames = generate_frame_vectors(video_path)
     similarities = compute_cosine_similarity(frames, total_frame_count)
-    shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
-    base_name = os.path.splitext(os.path.basename(video_path))[0]
-    shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
-    write_to_csv(shot_tuples, base_name+".csv")
-    convert_frame_file_to_seconds(base_name+".csv",video_path,base_name+".csv")
-    if args.write_frames is not None:
-        os.makedirs(os.path.dirname(args.write_frames), exist_ok=True)
-        overlay_markers(video_path, shot_tuples, base_name)
-    if args.key_shots:
-        key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
-        write_key_shots(key_shots,base_name+"_shots.csv")
+    write_cosine_similarities_to_csv(similarities, base_name+"_cosine_similarities.csv")
+    if False:
+        shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
+        shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
+        write_shot_boundary_tuples_to_csv(shot_tuples, base_name+".csv")
+        convert_frame_file_to_seconds(base_name+".csv",video_path,base_name+".csv")
+        if args.write_frames is not None:
+            os.makedirs(os.path.dirname(args.write_frames), exist_ok=True)
+            overlay_markers(video_path, shot_tuples, base_name)
+        if args.key_shots:
+            key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
+            write_key_shots(key_shots,base_name+"_shots.csv")
+
+# TODO: ability to run script with multiple cosine similarity thresholds in parallel
+# Actually, it would make most sense to simply save the cosine similarities to a file,
+# and separate out the part of the script that uses that to find the shot boundaries
