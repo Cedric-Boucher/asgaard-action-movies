@@ -16,6 +16,10 @@ from typing import Any, Optional
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+COSINE_SIMILARITY_CSV_DIRECTORY: str = "./cosine_similarities/"
+
+os.makedirs(COSINE_SIMILARITY_CSV_DIRECTORY, exist_ok=True)
+
 def video_to_pil_frames(video_path) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
     total_frames: int = video_total_frame_count(video_path)
@@ -202,7 +206,8 @@ if __name__=="__main__":
     total_frame_count: int = video_total_frame_count(video_path)
     frames = generate_frame_vectors(video_path)
     similarities = compute_cosine_similarity(frames, total_frame_count)
-    write_cosine_similarities_to_csv(similarities, base_name+"_cosine_similarities.csv")
+    cosine_similarities_csv_path: str = os.path.join(COSINE_SIMILARITY_CSV_DIRECTORY, base_name+"_cosine_similarities.csv")
+    write_cosine_similarities_to_csv(similarities, cosine_similarities_csv_path)
     if False:
         shot_boundary_indices = generate_shot_boundary_indices(total_frame_count, similarities, threshold)
         shot_tuples = shot_boundary_indices_to_tuples(shot_boundary_indices)
