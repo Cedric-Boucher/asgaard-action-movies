@@ -16,10 +16,6 @@ from typing import Any, Optional
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-FRAME_BUFFER_SIZE: int = 3 # only keep up to this many frames in memory (buffer/queue)
-FRAME_VECTOR_BUFFER_SIZE: int = 10000
-COSINE_SIMILARITY_BUFFER_SIZE: int = 10000
-
 def video_to_pil_frames(video_path) -> Generator[Image.Image, None, None]:
     video = cv2.VideoCapture(video_path)
     total_frames: int = video_total_frame_count(video_path)
