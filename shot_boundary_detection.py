@@ -11,7 +11,7 @@ import pandas as pd
 from ffmpeg import FFmpeg
 import json
 from collections.abc import Iterable, Generator
-from typing import Any, Optional
+from typing import Optional
 
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -219,7 +219,3 @@ if __name__=="__main__":
         if args.key_shots:
             key_shots = get_key_shot_frame(shot_tuples,frame_vectors=torch.cat(list(generate_frame_vectors(video_path))))
             write_key_shots(key_shots,base_name+"_shots.csv")
-
-# TODO: ability to run script with multiple cosine similarity thresholds in parallel
-# Actually, it would make most sense to simply save the cosine similarities to a file,
-# and separate out the part of the script that uses that to find the shot boundaries
