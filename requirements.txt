@@ -9,3 +9,4 @@ python-ffmpeg==2.0.12
 opencv-python==3.44.0.86
 sentencepiece==0.2.0
 protobuf==6.30.2
+matplotlib==3.10.3
