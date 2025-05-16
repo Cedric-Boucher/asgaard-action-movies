@@ -13,6 +13,7 @@ def generate_shot_boundary_indices(total_frame_count: int, cosine_similarities: 
     for i, _, similarities in tqdm(cosine_similarities, desc="Comparing Frame Similarities to Threshold", total=total_frame_count):
         if similarities < threshold:
             yield i
+    yield total_frame_count-1
 
 def shot_boundary_indices_to_tuples(shot_boundary_indices: Iterable[int]) -> Generator[tuple[int, int], None, None]:
     last_shot_boundary_index: int = 0
