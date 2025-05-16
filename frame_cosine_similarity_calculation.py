@@ -162,12 +162,10 @@ if __name__=="__main__":
     print(f"device:{DEVICE}")
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
     parser.add_argument('--video', required=True, type=str, help="Video path")
-    parser.add_argument('--threshold', required=True, type=float,help="Cosine Similarity Threshold")
     parser.add_argument("--write-frames", default=None, type=str, help="Write Frames to Files")
     parser.add_argument("--key-shots", action="store_true",help="Get Key Shots")
     args = parser.parse_args()
     video_path = args.video
-    threshold = args.threshold
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     total_frame_count: int = video_total_frame_count(video_path)
     frames = generate_frame_vectors(video_path)
