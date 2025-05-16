@@ -21,16 +21,28 @@ from FractalDimension import FractalDimension
 FeatureVector = tuple[float, float, float, float, float, float, float, float, float]
 FeatureWeights = tuple[float, float, float, float, float, float, float, float, float]
 
+#FEATURE_WEIGHTS: FeatureWeights = (
+#    0.10,
+#    0.16,
+#    0.10,
+#    0.08,
+#    0.16,
+#    0.08,
+#    0.08,
+#    0.16,
+#    0.08
+#)
+
 FEATURE_WEIGHTS: FeatureWeights = (
-    0.10,
-    0.16,
-    0.10,
-    0.08,
-    0.16,
-    0.08,
-    0.08,
-    0.16,
-    0.08
+    0.15,
+    0.2,
+    0.15,
+    0.15,
+    0.2,
+    0.15,
+    0.0,
+    0.0,
+    0.0
 )
 
 FEATURE_QUANTIZATION_LEVELS: int = 16
@@ -166,6 +178,7 @@ def frame_fractal_dimension(frame: Image.Image) -> tuple[float, float, float]:
     return (fractal_dimension_r, fractal_dimension_g, fractal_dimension_b)
 
 def fractal_dimension(grayscale_image: np.ndarray) -> float:
+    return 0.0
     target_shape: tuple[int, int] = (max(grayscale_image.shape), max(grayscale_image.shape))
     stretched_image: np.ndarray = cv2.resize(grayscale_image, target_shape, interpolation=cv2.INTER_LINEAR)
     return float(FractalDimension.fractal_dimension(stretched_image))
