@@ -412,6 +412,40 @@ def local_mean_smoothing(data: list[float], window_size: int) -> list[float]:
 
     return smoothed
 
+def generate_scene_boundary_indices(window_similarities: Iterable[float], window_similarity_count: int, left_window_size: int, right_window_size: int, local_window_threshold: float) -> Generator[int, None, None]:
+    assert window_similarity_count > 0
+    assert left_window_size > 0
+    assert right_window_size > 0
+    assert local_window_threshold > 0
+    assert local_window_threshold < 1
+
+    largest_window: int = max(left_window_size, right_window_size)
+
+    last_window_similarity: Optional[float] = None
+    last_boundary_i: int = 0
+    for i, window_similarity in tqdm(enumerate(window_similarities), desc="Comparing Window Similarities to Threshold", total=window_similarity_count):
+        assert window_similarity >= 0
+        assert window_similarity <= 1
+        assert i < window_similarity_count
+
+        if last_window_similarity is None:
+            last_window_similarity = window_similarity
+            continue
+
+        if (i - last_boundary_i) < largest_window:
+            # not enough shots to be able to detect a scene change
+            last_window_similarity = window_similarity
+            continue
+
+        if abs(window_similarity - last_window_similarity) > local_window_threshold:
+            last_boundary_i = i
+            yield i
+
+        last_window_similarity = window_similarity
+
+    yield window_similarity_count-1
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
     parser.add_argument('--video', required=True, type=str, help="Path to Video File")
