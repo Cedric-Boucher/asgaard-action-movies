@@ -82,7 +82,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Shot Generator Using Cosine Similarity")
     parser.add_argument('--cosine-similarities-csv-path', "-csv", required=True, type=str, help="Path to CSV file containing the cosine similarities")
     parser.add_argument('--video-path', "--video", required=True, type=str, help="Path to video file")
-    parser.add_argument('--threshold', required=True, type=float, nargs="*", help="One of more threshold values for cosine similarities (between 0 and 1)")
+    parser.add_argument('--threshold', required=True, type=float, nargs="*", help="One or more threshold values for cosine similarities (between 0 and 1)")
     args = parser.parse_args()
     cosine_similarities_csv_path: str = args.cosine_similarities_csv_path
     video_path: str = args.video_path
